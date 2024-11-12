@@ -1,5 +1,13 @@
 /* COP 3502C Programming Assignment 4
 This program is written by: Kevin Rodriguez */
+/*
+Program calculates the minimum distance given a starting point and 
+coordinates to different garages. Uses different sorting methods
+in order to go through calculating the shortest distance PAIRS
+so that the total distance is as minimal as possible.
+Takes in input that is separated by 1 word could be recoded to handle
+different inputs.
+*/
 #include<stdlib.h>
 #include<stdio.h>
 #include<math.h>
