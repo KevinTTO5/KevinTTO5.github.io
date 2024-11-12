@@ -1,5 +1,11 @@
 /* COP 3502C Assignment 5
 This program is written by: Kevin Rodriguez */
+/*
+Code is meant to create Binary tree and apply different functions to 
+manipulate said binary tree via assignment instructions & restrictions.
+Takes in input that is separated by 1 word could be recoded to handle
+different inputs.
+*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
