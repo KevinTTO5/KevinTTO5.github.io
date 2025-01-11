@@ -1,0 +1,398 @@
+const DAY_OFFSET = 0; // 0 for today, 1 for tomorrow, -1 for yesterday, etc.
+
+const instructorSpots = 5; //Change for each center
+
+const colorArr = ["#F4CCCC", "#FCE5CD", "#FFF2CC", "#D9EAD3", "#CFE2F3", "#EAD1DC", "#F4CCCC"]; //Colors for instructors
+
+// Utility function to calculate the target date
+function getTargetDate(offset = 0) {
+    const targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() + offset);
+    targetDate.setHours(0, 0, 0, 0);
+    return targetDate;
+}
+
+function fetchCalendarEvents() {
+    const targetDate = getTargetDate(DAY_OFFSET);
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Daily Schedule') || SpreadsheetApp.getActiveSpreadsheet().insertSheet('Daily Schedule');
+    const range = sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns());
+
+    // Clear content (text, numbers, and formulas)
+    range.clearContent();
+    range.setBackground(null);
+
+    setDayAndDateInCell();
+
+    // Step 1: Setup time slots
+    const timeColumnMap = setupTimeSlots(sheet, targetDate);
+    if (!timeColumnMap) {
+        logDiagnostics(sheet, 35, ["Error: No time slots available for today."]);
+        return;
+    }
+
+    // Step 2: Import employee shifts
+    const employees = importEmployeeShifts(sheet, targetDate, timeColumnMap);
+    if (!employees || employees.length === 0) {
+        logDiagnostics(sheet, 35, ["Error: No employees found."]);
+        return;
+    }
+
+    // Step 3: Import and assign student sessions
+    importStudentSessions(sheet, employees, timeColumnMap, targetDate);
+}
+
+function setupTimeSlots(sheet, targetDate) {
+    const centerHours = {
+        1: { start: [15, 0], assignableEnd: [19, 0], displayEnd: [18, 30] }, // Monday
+        2: { start: [15, 0], assignableEnd: [19, 0], displayEnd: [18, 30] }, // Tuesday
+        3: { start: [15, 0], assignableEnd: [19, 0], displayEnd: [18, 30] }, // Wednesday
+        4: { start: [15, 0], assignableEnd: [19, 0], displayEnd: [18, 30] }, // Thursday
+        6: { start: [10, 0], assignableEnd: [14, 0], displayEnd: [13, 30] }, // Saturday
+    };
+
+    const dayOfWeek = targetDate.getDay();
+    const hours = centerHours[dayOfWeek];
+    if (!hours) return null;
+
+    const startTime = new Date();
+    startTime.setHours(...hours.start, 0);
+
+    const assignableEndTime = new Date();
+    assignableEndTime.setHours(...hours.assignableEnd, 0);
+
+    const displayEndTime = new Date();
+    displayEndTime.setHours(...hours.displayEnd, 0);
+
+    let col = 3; // Start from column C
+    const timeColumnMap = {};
+
+    // Loop to create time slots for display
+    while (startTime <= displayEndTime) {
+        const timeSlot = Utilities.formatDate(startTime, Session.getScriptTimeZone(), "h:mm a").trim();
+        sheet.getRange(4, col).setBackground("#FFFF00");
+        sheet.getRange(4, col).setValue(timeSlot); // Write time slot to Row 4
+
+        // Map all slots to columns (even beyond display)
+        timeColumnMap[timeSlot] = col;
+
+        startTime.setMinutes(startTime.getMinutes() + 30); // Increment by 30 minutes
+        col++;
+    }
+
+    // Map the assignableEndTime slot if it wasn't already included
+    if (startTime <= assignableEndTime) {
+        const timeSlot = Utilities.formatDate(assignableEndTime, Session.getScriptTimeZone(), "h:mm a").trim();
+        timeColumnMap[timeSlot] = col; // Add assignableEndTime to the map
+    }
+
+    return timeColumnMap; // Return mapping of assignable slots
+}
+
+
+function importEmployeeShifts(sheet, targetDate, timeColumnMap) {
+    const calendarId = "calendarID goes here";
+    const keywordExclusions = ["DOO", "DOE", "LI"]; // Exclude events with these keywords
+    const startRow = 5, col = 2, rowSpacing = 6;
+
+    const today = new Date(targetDate); // Use targetDate
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    const calendar = CalendarApp.getCalendarById(calendarId);
+    const events = calendar.getEvents(today, tomorrow);
+
+    const employees = [];
+    let row = startRow;
+
+    let index = 0;
+    let numEvents = 0;
+
+    events.forEach(event => {
+        numEvents++;
+        const title = event.getTitle();
+        if (keywordExclusions.some(keyword => title.includes(keyword))) return;
+
+        const employeeName = title.split(":")[0].trim();
+        const startTime = Utilities.formatDate(event.getStartTime(), Session.getScriptTimeZone(), "h:mm a").trim();
+        console.log(`Employee unedited start time ${startTime}`);
+        const roundedStartTime = roundToNearestHalfHour(event.getStartTime());
+        console.log(`Edited Start time ${roundedStartTime}`);
+        const endTime = Utilities.formatDate(event.getEndTime(), Session.getScriptTimeZone(), "h:mm a").trim();
+        
+        if (!employeeName || !startTime || !endTime) return;
+
+        const shiftStart = startTime.split(' ')[0];
+        const shiftEnd = endTime.split(' ')[0];
+        const shiftRange = `${shiftStart}-${shiftEnd}`;
+
+        sheet.getRange(row + 1, 2, 1, 1).setValue(shiftRange);
+
+        const startSlot = timeColumnMap[roundedStartTime];
+        const endSlot = timeColumnMap[endTime];
+
+        let color = colorArr[index]; 
+
+        console.log(`Current employee ${employeeName} start time ${startSlot} and end time ${endSlot}`);
+
+        console.log(`endTime: ${endTime}`);
+        console.log(`timeColumnMap: ${JSON.stringify(timeColumnMap)}`);
+
+
+        sheet.getRange(row, startSlot, 4, (endSlot) - startSlot).setBackground(color);;
+
+        index++;
+
+        checkCellColors(sheet.getRange(row, 3, 4, 8));
+
+        console.log(`Current employee start time ${startSlot} and end time ${endSlot}`);
+        
+
+        sheet.getRange(row, col).setValue(employeeName); // Write employee name
+        employees.push({
+            name: employeeName,
+            row,
+            start: startTime,
+            end: endTime,
+        });
+        row += rowSpacing;
+    });
+
+    while (numEvents != instructorSpots) {
+      console.log(`Current numevents ${numEvents}`);
+      let color = colorArr[index];
+      sheet.getRange(row, 3, 4, 8).setBackground(color);;
+      index++;
+      numEvents++;
+      row += rowSpacing;
+    }
+    return employees;
+}
+
+function importStudentSessions(sheet, employees, timeColumnMap, targetDate) {
+    const calendarId = "Calendar ID goes here";
+    const maxStudents = 4; // Maximum students per instructor per time slot
+
+    const calendar = CalendarApp.getCalendarById(calendarId);
+
+    const today = new Date(targetDate); // Use targetDate
+    const events = calendar.getEvents(today, new Date(today.getTime() + 24 * 60 * 60 * 1000));
+
+    const unassignable = [];
+    const availability = {};
+
+    events.forEach(event => {
+        const title = event.getTitle();
+        const eventStartTime = Utilities.formatDate(event.getStartTime(), Session.getScriptTimeZone(), "h:mm a").trim();
+        const eventEndTime = Utilities.formatDate(event.getEndTime(), Session.getScriptTimeZone(), "h:mm a").trim();
+        const standardizedTitle = title.replace(/[\u2019\u0060\u02BC]/g, "'"); // Replace smart apostrophes and others with '
+        const studentName = standardizedTitle.split("'")[0].trim();
+
+        // Validate that the event data is correct
+        if (!studentName || !eventStartTime || !eventEndTime) {
+            unassignable.push(`Invalid data for student: ${title}`);
+            return;
+        }
+
+        const startSlot = timeColumnMap[eventStartTime];
+        const endSlot = timeColumnMap[eventEndTime] - 1;
+
+        if (!startSlot || !endSlot) {
+            unassignable.push(`${studentName}: No matching slot (${eventStartTime} - ${eventEndTime})`);
+            return;
+        }
+        console.log(`Working on ${studentName}`);
+        let assigned = false;
+    
+        for (const { row, start, end } of employees) {
+            if (isInstructorAvailable(availability, eventStartTime, eventEndTime, start, end, maxStudents, startSlot, endSlot, row)) {
+                assignStudent(sheet, studentName, row, startSlot, endSlot, availability);
+                assigned = true;
+                break;
+            }
+        }
+
+        if (!assigned) {
+            unassignable.push(`${studentName}: Could not assign at ${eventStartTime}`);
+        }
+    });
+    logDiagnostics(sheet, 8, unassignable);
+}
+
+function assignStudent(sheet, studentName, instructorRow, startSlot, endSlot, availability) {
+    for (let offset = 0; offset < 4; offset++) {
+        const currentRow = instructorRow + offset;
+
+        let isRowFree = true;
+        for (let slot = startSlot; slot <= endSlot; slot++) {
+            if (!availability[currentRow]) availability[currentRow] = {};
+            if (!availability[currentRow][slot]) availability[currentRow][slot] = 0;
+            if (availability[currentRow][slot] >= 1) {
+                isRowFree = false;
+                break;
+            }
+        }
+
+        if (isRowFree) {
+            for (let slot = startSlot; slot <= endSlot; slot++) {
+                availability[currentRow][slot]++;
+            }
+
+            // Write student name
+            sheet.getRange(currentRow, startSlot).setValue(studentName);
+
+            // Apply color coding based on duration
+            const sessionDuration = endSlot - startSlot;
+            let color = "#FFFFFF"; // Default white
+            if (sessionDuration == 0) {
+              color = "#89CFF0"; //Baby Blue for 30 min sessions
+              for (let col = startSlot; col <= endSlot; col++) {
+                sheet.getRange(currentRow, col).setBackground(color);
+            }
+            } else if (sessionDuration === 2) {
+                color = "#FF77FF"; // Light pink for 1.5-hour sessions
+                for (let col = startSlot; col <= endSlot; col++) {
+                sheet.getRange(currentRow, col).setBackground(color);
+            }
+            }
+            return; // Exit after assigning
+        }
+    }
+
+    console.log(`No available row for ${studentName} in slots ${startSlot}-${endSlot}`);
+}
+
+function isInstructorAvailable(availability, eventStartTime, eventEndTime, instructorStartTime, instructorEndTime, maxStudents, startSlot, endSlot, instructorRow) {
+    if (eventStartTime < instructorStartTime || eventEndTime > instructorEndTime) {
+        return false;
+    }
+
+    for (let row = instructorRow; row < instructorRow + maxStudents; row++) {
+        let isRowFree = true;
+
+        for (let slot = startSlot; slot <= endSlot; slot++) {
+            if (!availability[row]) {
+              availability[row] = {};
+            }
+            if (!availability[row][slot])  {
+              availability[row][slot] = 0;
+            }
+            if (availability[row][slot] >= 1) {
+                isRowFree = false;
+                break;
+            }
+        }
+
+        if (isRowFree) return true;
+    }
+
+    return false;
+}
+
+function logDiagnostics(sheet, row, data) {
+    if (data.length === 0) {
+        sheet.getRange(row, 12).setValue("All students successfully assigned.");
+    } else {
+        data.forEach((line, index) => {
+            sheet.getRange(row + index, 12).setValue(line);
+        });
+    }
+}
+
+function generatePaleColor() {
+    let color;
+    while (true) {
+        // Generate random RGB values for pale colors (high R, G, B values)
+        const r = Math.floor(Math.random() * 156) + 100; // Between 100 and 255
+        const g = Math.floor(Math.random() * 156) + 100; // Between 100 and 255
+        const b = Math.floor(Math.random() * 156) + 100; // Between 100 and 255
+
+        // Check for exclusion conditions
+        const isBlue = b > r && b > g; // Exclude blues
+        const isPink = r > g && r > b && (r - b) < 50; // Exclude pinks
+        const isYellow = r > 200 && g > 200 && b < 100; // Exclude yellows
+
+        if (!isBlue && !isPink && !isYellow) {
+            // If not excluded, convert to hex and return
+            color = `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+            break;
+        }
+    }
+    return color;
+}
+
+function roundToNearestHalfHour(date) {
+    const hours = date.getHours();
+    const minutes = date.getMinutes();
+
+    console.log(`Current hours and minutes ${hours}, ${minutes}`);
+
+    let roundedMinutes = minutes;
+    let roundedHours = hours;
+
+    if (minutes == 15) {
+        roundedMinutes = 0; // Round down to the start of the hour
+    } else if (minutes == 45) {
+        roundedMinutes = 0; // Round to the half-hour
+        roundedHours++;
+    }
+
+    console.log(`Current rounded hours ${roundedHours} and rounded minutes ${roundedMinutes}`);
+    // Ensure hours wrap around correctly (e.g., 24-hour format to 12-hour)
+    const roundedDate = new Date(date);
+    roundedDate.setHours(roundedHours);
+    roundedDate.setMinutes(roundedMinutes);
+    return Utilities.formatDate(roundedDate, Session.getScriptTimeZone(), "h:mm a").trim();
+}
+
+function setDayAndDateInCell() {
+  // Get the current date
+  const today = getTargetDate(DAY_OFFSET);
+
+  // Array of weekday names
+  const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+  // Extract the day of the week
+  const dayOfWeek = weekdays[today.getDay()];
+
+  // Extract the month and date
+  const month = today.getMonth() + 1; // Months are zero-indexed
+  const date = today.getDate();
+
+  // Format the output
+  const formattedDate = `${dayOfWeek} ${month}/${date}`;
+
+  // Access the active spreadsheet and a specific sheet
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+
+  // Set the formatted date in a specific cell, e.g., A1
+  sheet.getRange("B4").setValue(formattedDate);
+
+  // Log the action (optional)
+  Logger.log(`Date set in cell A1: ${formattedDate}`);
+}
+
+function checkCellColors(range) {
+
+  console.log("Running Check Cell Colors");
+
+  // Get the background colors of the range
+  const backgrounds = range.getBackgrounds();
+
+  const targetColor = "#ffffff"; 
+
+  const newColor = "#d9d9d9"
+
+  // Iterate through the background colors and log if they match the target color
+  backgrounds.forEach((row, rowIndex) => {
+    row.forEach((cellColor, colIndex) => {
+      if (cellColor === targetColor) {
+        console.log("Cell color is white");
+        const cell = range.getCell(rowIndex + 1, colIndex + 1);
+        // Change the background color of the cell
+        cell.setBackground(newColor);
+      }
+    });
+  });
+}
+
+
